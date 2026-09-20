@@ -311,6 +311,9 @@ static struct usb_device_id rtw_usb_id_tbl[] = {
 	/*=== Realtek demoboard ===*/
 	{USB_DEVICE(USB_VENDER_ID_REALTEK, 0x0811),.driver_info = RTL8821},/* Default ID */
 	{USB_DEVICE(USB_VENDER_ID_REALTEK, 0x0821),.driver_info = RTL8821},/* Default ID */
+	{USB_DEVICE(0x2357, 0x011E),.driver_info = RTL8821}, /* TP-Link - Archer T2U Nano */
+	{USB_DEVICE(0x2357, 0x011F),.driver_info = RTL8821}, /* TP-Link - Archer T2U v3 */
+	{USB_DEVICE(0x2357, 0x0120),.driver_info = RTL8821}, /* TP-Link - Archer T2U Plus */
 	{USB_DEVICE(USB_VENDER_ID_REALTEK, 0x8822),.driver_info = RTL8821},/* Default ID */
 	{USB_DEVICE_AND_INTERFACE_INFO(USB_VENDER_ID_REALTEK, 0x0820,0xff,0xff,0xff),.driver_info = RTL8821}, /* 8821AU */
 	{USB_DEVICE_AND_INTERFACE_INFO(USB_VENDER_ID_REALTEK, 0x0823,0xff,0xff,0xff),.driver_info = RTL8821}, /* 8821AU */
@@ -668,7 +671,15 @@ static void usb_dvobj_deinit(struct usb_interface *usb_intf)
 		//Modify condition for 92DU DMDP 2010.11.18, by Thomas
 		if ((dvobj->NumInterfaces != 2 && dvobj->NumInterfaces != 3)
 		    || (dvobj->InterfaceNumber == 1)) {
-			if (interface_to_usbdev(usb_intf)->state != USB_STATE_NOTATTACHED) {
+			// Skip usb_reset_device on module unload. Re-enumerating the adapter
+			// mid-teardown corrupted kernel memory and oopsed an unrelated process
+			// ("Fixing recursive fault but reboot is needed"). The reset is only a
+			// convenience for the re-insmod site-survey path; in production the driver
+			// loads once at boot and is never removed. Still taken on the probe-failure
+			// path (processing_dev_remove == FALSE), and already skipped on a genuine
+			// unplug (state == NOTATTACHED).
+			if (interface_to_usbdev(usb_intf)->state != USB_STATE_NOTATTACHED
+			    && !dvobj->processing_dev_remove) {
 				//If we didn't unplug usb dongle and remove/insert modlue, driver fails on sitesurvey for the first time when device is up .
 				//Reset usb port for sitesurvey fail issue. 2009.8.13, by Thomas
 				DBG_871X("usb attached..., try to reset usb device\n");
@@ -1363,7 +1374,8 @@ _adapter *rtw_usb_if1_init(struct dvobj_priv *dvobj,
 		goto free_hal_data;
 	}
 
-#ifdef CONFIG_PM
+#if 0 /* Head unit kernel is PM_SLEEP=n: device_init_wakeup is not exported and the unit
+       * never suspends, so remote wakeup is unused. */
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2,6,18))
 	if(dvobj_to_pwrctl(dvobj)->bSupportRemoteWakeup) {
 		dvobj->pusbdev->do_remote_wakeup=1;
@@ -1402,7 +1414,8 @@ _adapter *rtw_usb_if1_init(struct dvobj_priv *dvobj,
 	}
 #endif
 	//2012-07-11 Move here to prevent the 8723AS-VAU BT auto suspend influence
-#if (LINUX_VERSION_CODE>=KERNEL_VERSION(2,6,33))
+#if 0 /* Head unit kernel does not export usb_autopm_get_interface -- there is no
+       * autosuspend to pin (CONFIG_AUTOSUSPEND is off, see osdep_service_linux.h). */
 	if (usb_autopm_get_interface(pusb_intf) < 0) {
 		DBG_871X( "can't get autopm: \n");
 	}
