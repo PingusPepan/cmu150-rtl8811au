@@ -3,7 +3,9 @@ EXTRA_CFLAGS += -O1
 #EXTRA_CFLAGS += -O3
 EXTRA_CFLAGS += -Wall
 #EXTRA_CFLAGS += -Wextra
-EXTRA_CFLAGS += -Werror
+# -Werror is off for this build: with POWER_SAVING and several cfg80211 features
+# compiled out, the ifdef-heavy vendor code leaves unused variables everywhere on gcc 4.9.
+#EXTRA_CFLAGS += -Werror
 #EXTRA_CFLAGS += -pedantic
 #EXTRA_CFLAGS += -Wshadow -Wpointer-arith -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes
 EXTRA_CFLAGS += -Wframe-larger-than=1536
@@ -40,7 +42,7 @@ CONFIG_SDIO_HCI = n
 CONFIG_GSPI_HCI = n
 ########################## Features ###########################
 CONFIG_MP_INCLUDED = y
-CONFIG_POWER_SAVING = y
+CONFIG_POWER_SAVING = n
 CONFIG_USB_AUTOSUSPEND = n
 CONFIG_HW_PWRP_DETECTION = n
 CONFIG_WIFI_TEST = n
@@ -74,7 +76,10 @@ CONFIG_RTW_SDIO_PM_KEEP_POWER = y
 ###################### Platform Related #######################
 # Jeston Nano Headers
 # /usr/src/linux-headers-4.9.140-tegra-ubuntu18.04_aarch64/kernel-4.9
-CONFIG_PLATFORM_I386_PC = y
+CONFIG_PLATFORM_I386_PC = n
+# CMU150 head unit (i.MX6Q, Linux 3.0.35, TI compat-wireless cfg80211).
+# See the CONFIG_PLATFORM_ARM_CMU block below for the flags this selects.
+CONFIG_PLATFORM_ARM_CMU = y
 CONFIG_PLATFORM_ARM_RPI = n
 CONFIG_PLATFORM_ARM_JET_NANO = n
 CONFIG_PLATFORM_ANDROID_X86 = n
@@ -125,6 +130,10 @@ CONFIG_PLATFORM_MOZART = n
 CONFIG_PLATFORM_RTK119X = n
 CONFIG_PLATFORM_NOVATEK_NT72668 = n
 ########################## DEBUG ##############################
+# Production: all off. These compile in the driver's RT_TRACE/DBG_871X calls on the RX
+# validate/dispatch/MLME paths, which printk roughly 25 lines per data frame and stall the
+# i.MX6 during a video stream. Turn on (and raise GlobalDebugLevel to _drv_info_) only for
+# a debugging session.
 CONFIG_DEBUG = n
 CONFIG_DEBUG_CFG80211 = n
 CONFIG_DEBUG_RTL871X = n
@@ -901,6 +910,25 @@ endif
 INSTALL_PREFIX :=
 endif
 
+ifeq ($(CONFIG_PLATFORM_ARM_CMU), y)
+# CMU150: i.MX6Q, Linux 3.0.35, cfg80211/nl80211 control plane.
+#
+# The head unit's kernel is CONFIG_WIRELESS_EXT=n, so struct net_device carries no
+# wireless_handlers/wireless_data and netdev_ops sits at offset 0xd8. Building this driver
+# for WEXT places it at 0xe0 instead and the SoC hangs in register_netdevice. Build the
+# cfg80211 control plane (which is also what the unit's own hostapd and wpa_supplicant
+# drive, -D nl80211) and build the kernel tree WIRELESS_EXT=n so net_device matches.
+# Details: docs/ABI-NOTES.md.
+EXTRA_CFLAGS += -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT
+EXTRA_CFLAGS += -DCONFIG_LITTLE_ENDIAN
+ARCH := arm
+CROSS_COMPILE ?= arm-linux-gnueabi-
+KVER := 3.0.35
+KSRC ?= $(CURDIR)/../build/.work/linux-imx6
+MODDESTDIR :=
+INSTALL_PREFIX :=
+endif
+
 ifeq ($(CONFIG_PLATFORM_ARM_RPI), y)
 EXTRA_CFLAGS += -DCONFIG_LITTLE_ENDIAN
 EXTRA_CFLAGS += -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT
@@ -1552,10 +1580,10 @@ endif
 ifeq ($(CONFIG_DEBUG), y)
 EXTRA_CFLAGS += -DCONFIG_DEBUG
 endif
-ifeq ($(DCONFIG_DEBUG_CFG80211), y)
+ifeq ($(CONFIG_DEBUG_CFG80211), y)
 EXTRA_CFLAGS += -DCONFIG_DEBUG_CFG80211
 endif
-ifeq ($(DCONFIG_DEBUG_RTL871X), y)
+ifeq ($(CONFIG_DEBUG_RTL871X), y)
 EXTRA_CFLAGS += -DCONFIG_DEBUG_RTL871X
 endif
 
@@ -1619,6 +1647,19 @@ obj-m := $(MODULE_NAME).o
 all: modules
 
 modules:
+# Building this by hand is a trap. Without NOSTDINC_FLAGS pointing at abi/include the driver
+# compiles against the reference kernel's stock cfg80211 headers instead of the head unit's
+# backported ones, and the result builds cleanly and then misbehaves on the unit -- the
+# hardest class of bug in this port. Refuse rather than quietly produce that module.
+# (Checked here, not at parse time: kbuild re-reads this file with no MAKECMDGOALS during
+# `make clean`, so a parse-time check cannot tell a build from a clean.)
+ifeq ($(CONFIG_PLATFORM_ARM_CMU), y)
+	@test -n "$(findstring abi/include,$(NOSTDINC_FLAGS))" || { \
+	  echo "ERROR: build via build/build-driver.sh -- NOSTDINC_FLAGS must point at"        >&2; \
+	  echo "       abi/include/ so this compiles against the head unit's cfg80211, not"    >&2; \
+	  echo "       the reference kernel's. See docs/BUILD.md."                             >&2; \
+	  exit 1; }
+endif
 	$(MAKE) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -C $(KSRC) M=$(shell pwd)  modules
 
 strip:
