@@ -758,25 +758,34 @@ void mgt_dispatcher(_adapter *padapter, union recv_frame *precv_frame)
 	    (subtype == WIFI_ASSOCREQ) ||
 	    (subtype == WIFI_REASSOCREQ))
 	{
-		if(check_fwstate(pmlmepriv, WIFI_AP_STATE) == _TRUE)
+		/* Realtek's code is a switch where case WIFI_AUTH picks OnAuth/OnAuthClient and
+		 * falls through to case WIFI_ASSOCREQ/WIFI_REASSOCREQ, which dispatch. This tree
+		 * had rewritten it as an if/else that broke both halves:
+		 *  - WIFI_AUTH was remapped but never dispatched, so every client authentication
+		 *    was silently dropped;
+		 *  - ASSOCREQ/REASSOCREQ were remapped to OnAuth too, so an assoc-req body was
+		 *    parsed as an auth frame ("auth rejected due to bad alg") and every
+		 *    association was rejected. ptable points into the global mlme_sta_tbl, so that
+		 *    remap also overwrote their OnAssocReq entry for good.
+		 * With WIPHY_FLAG_HAVE_AP_SME the driver owns client authentication and
+		 * association, so both paths must work: remap only WIFI_AUTH, dispatch all three. */
+		if (subtype == WIFI_AUTH)
 		{
-			ptable->func = &OnAuth;
-		}
-		else
-		{
-			ptable->func = &OnAuthClient;
-		}
-
-		// fallthrough
-		if ((subtype == WIFI_ASSOCREQ) ||
-		    (subtype == WIFI_REASSOCREQ))
-		{
-			_mgt_dispatcher(padapter, ptable, precv_frame);
-
 			if(check_fwstate(pmlmepriv, WIFI_AP_STATE) == _TRUE)
 			{
-				rtw_hostapd_mlme_rx(padapter, precv_frame);
+				ptable->func = &OnAuth;
 			}
+			else
+			{
+				ptable->func = &OnAuthClient;
+			}
+		}
+
+		_mgt_dispatcher(padapter, ptable, precv_frame);
+
+		if(check_fwstate(pmlmepriv, WIFI_AP_STATE) == _TRUE)
+		{
+			rtw_hostapd_mlme_rx(padapter, precv_frame);
 		}
 	}
 	else if (subtype == WIFI_PROBEREQ)
