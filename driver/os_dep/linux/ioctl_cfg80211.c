@@ -3342,6 +3342,16 @@ void rtw_cfg80211_indicate_sta_assoc(_adapter *padapter, u8 *pmgmt_frame, uint f
 			ie_offset = _REASOCREQ_IE_OFFSET_;
 
 		sinfo.filled = 0;
+		/* Set assoc_req_ies unconditionally. The head unit's cfg80211 is TI
+		   compat-wireless, whose struct station_info does have assoc_req_ies and the
+		   STATION_INFO_ASSOC_REQ_IES bit (abi/include/net/cfg80211.h) even though
+		   LINUX_VERSION_CODE reports 3.0.35. hostapd needs those IEs from the NEW_STATION
+		   event to read the station's RSN IE and run the WPA2 4-way handshake; without
+		   them the station associates as a driver STA but hostapd never starts EAPOL, so
+		   the phone times out and deauthenticates with reason 3. The stock
+		   LINUX_VERSION_CODE >= 3.2 guard is a false negative against a backported
+		   cfg80211 -- the version says 3.0.35, the headers always provide the members.
+		   Same class of bug as the WIPHY_FLAG_HAVE_AP_SME guard below. */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0))
 		sinfo.filled = STATION_INFO_ASSOC_REQ_IES;
 #endif
@@ -5915,6 +5925,30 @@ static void rtw_cfg80211_preinit_wiphy(_adapter *padapter, struct wiphy *wiphy)
 	/* if (padapter->registrypriv.wireless_mode & WIRELESS_11A) */
 	wiphy->bands[IEEE80211_BAND_5GHZ] = rtw_spt_band_alloc(IEEE80211_BAND_5GHZ);
 #endif
+
+	/* Set CUSTOM_REGULATORY *before* wiphy_register(), which rtw_wdev_alloc calls right
+	 * after this. Otherwise the core applies its world regdomain to our channels at register
+	 * time, leaving orig_flags = PASSIVE_SCAN|NO_IBSS across 5 GHz; the driver's on-open
+	 * custom regdomain then computes chan->flags = orig_flags | rule_flags | bw_flags in
+	 * handle_channel_custom, OR-ing onto that stale passive bit, so channel 36 stayed 0x26
+	 * and hostapd could not beacon. With the flag set first, ignore_reg_update() skips the
+	 * world regdomain at register time, orig_flags stay clean, and the custom regdomain
+	 * (5170-5250 active) makes channel 36 beaconable. rt2x00 orders it the same way. */
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0))
+	wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
+#else
+	wiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
+#endif
+
+	/* Advertise AP SME so hostapd lets the driver's native MLME (OnAuth/OnAssocReq under
+	 * CONFIG_NATIVEAP_MLME) handle client authentication and association, instead of spinning
+	 * up a host-SME monitor interface (mon.wlanN). This is a fullMAC part and cannot do
+	 * host-based SME: without the flag the beacon goes out and the phone sees the SSID, but
+	 * its authentication never reaches the driver and it never associates. Stock sets
+	 * HAVE_AP_SME only for >= 3.3.0; this kernel reports 3.0.35 yet the flag (BIT(17)) exists
+	 * in its backported cfg80211. Associated stations are reported to hostapd through
+	 * cfg80211_new_sta (RTW_USE_CFG80211_STA_EVENT, enabled for this platform). */
+	wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38) && LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0))
 	wiphy->flags |= WIPHY_FLAG_SUPPORTS_SEPARATE_DEFAULT_KEYS;
