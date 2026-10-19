@@ -62,13 +62,16 @@ static struct country_code_to_enum_rd allCountries[] = {
 	REG_RULE(5150-10, 5850+10, 40, 0, 30,	\
 	NL80211_RRF_PASSIVE_SCAN | NL80211_RRF_NO_IBSS)
 
+/* 2.4 GHz channels 1-13 active plus 5 GHz UNII-1 (5170-5250, channels 36-48) active;
+ * anything not listed is disabled by cfg80211. With the reg_notifier and the post-apply
+ * pass removed below, this is now the only thing that sets the wiphy channel flags, which
+ * is what lets hostapd beacon on channel 36. */
 static const struct ieee80211_regdomain rtw_regdom_rd = {
-	.n_reg_rules = 3,
+	.n_reg_rules = 2,
 	.alpha2 = "99",
 	.reg_rules = {
-		RTW_2GHZ_CH01_11,
-		RTW_2GHZ_CH12_13,
-		RTW_5GHZ_5150_5850,
+		REG_RULE(2402, 2482, 40, 0, 20, 0),
+		REG_RULE(5170, 5250, 40, 0, 23, 0),
 	}
 };
 
@@ -322,6 +325,12 @@ static int rtw_ieee80211_channel_to_frequency(int chan, int band)
 
 static void _rtw_reg_apply_flags(struct wiphy *wiphy)
 {
+	/* Compiled out. rtw_regdom_rd, installed via wiphy_apply_custom_regulatory, is now the
+	 * sole source of channel flags. Re-applying channel-plan/ScanType flags here clobbered it
+	 * whenever it ran -- notably when the cfg80211 core invoked it through the reg_notifier
+	 * on the boot world-regdomain event -- putting channel 36 back to passive and stopping
+	 * beaconing. The stock body is kept below for reference. */
+#if 0
 #if 1				// by channel plan
 	_adapter *padapter = wiphy_to_adapter(wiphy);
 	//u8 channel_plan = padapter->mlmepriv.ChannelPlan;
@@ -422,6 +431,7 @@ static void _rtw_reg_apply_flags(struct wiphy *wiphy)
 		//printk("%s: freq %d(%d) flag 0x%02X \n", __func__, freq, channel, ch->flags);
 	}
 #endif
+#endif /* compiled out */
 }
 
 static void _rtw_reg_apply_world_flags(struct wiphy *wiphy,
@@ -521,8 +531,14 @@ static void _rtw_regd_init_wiphy(struct rtw_regulatory *reg, struct wiphy *wiphy
 {
 	const struct ieee80211_regdomain *regd;
 
-	wiphy->reg_notifier = rtw_reg_notifier;
-
+	/* Install only the custom regdomain: no reg_notifier, no post-apply pass. Stock Realtek
+	 * set wiphy->reg_notifier = rtw_reg_notifier and then post-applied channel flags through
+	 * _rtw_reg_apply_flags. For a CUSTOM_REGULATORY wiphy the cfg80211 core deliberately calls
+	 * the reg_notifier on the boot world-regdomain SET_BY_CORE event ("notify custom cards so
+	 * they can restore orig reg" in reg.c), and rtw_reg_notifier re-ran _rtw_reg_apply_flags,
+	 * clobbering the custom regdomain back to channel-plan/world passive flags -- channel 36
+	 * stayed passive and hostapd could not beacon. rt2x00 takes the same approach as this.
+	 * _rtw_reg_apply_flags is disabled; see its body. */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0))
 	wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
 	wiphy->flags &= ~WIPHY_FLAG_STRICT_REGULATORY;
@@ -535,11 +551,6 @@ static void _rtw_regd_init_wiphy(struct rtw_regulatory *reg, struct wiphy *wiphy
 
 	regd = _rtw_regdomain_select(reg);
 	wiphy_apply_custom_regulatory(wiphy, regd);
-
-	/* Hard code flags */
-	_rtw_reg_apply_flags(wiphy);
-	_rtw_reg_apply_radar_flags(wiphy);
-	_rtw_reg_apply_world_flags(wiphy, NL80211_REGDOM_SET_BY_DRIVER, reg);
 }
 
 static inline struct country_code_to_enum_rd *_rtw_regd_find_country(u16 countrycode)
