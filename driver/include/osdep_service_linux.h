@@ -122,7 +122,9 @@
 typedef struct urb *  PURB;
 #if (LINUX_VERSION_CODE>=KERNEL_VERSION(2,6,22))
 #ifdef CONFIG_USB_SUSPEND
-#define CONFIG_AUTOSUSPEND	1
+/* The build tree's headers have CONFIG_USB_SUSPEND=y, but the head unit's kernel exports
+   none of the usb_autopm_* / usb_*_autosuspend symbols -- keep autosuspend permanently off. */
+/* #define CONFIG_AUTOSUSPEND	1 */
 #endif
 #endif
 #endif
