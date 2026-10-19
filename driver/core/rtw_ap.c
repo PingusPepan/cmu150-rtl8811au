@@ -1190,6 +1190,14 @@ void start_bss_network(_adapter *padapter, u8 *pbuf)
 	//set MSR to AP_Mode
 	Set_MSR(padapter, _HW_STATE_AP_);
 
+	/* Enter the mlme-EXT AP state here too, where the BSS actually starts. OnAuth and
+	 * OnAssocReq drop every frame unless (pmlmeinfo->state & 0x03) == WIFI_FW_AP_STATE, and
+	 * stock sets that only in setopmode_hdl on change_iface to AP. Any path that clears it
+	 * before the BSS starts -- rtw_mlmeext_disconnect, for one, sets WIFI_FW_NULL_STATE --
+	 * would leave the AP beaconing but silently ignoring every client. Same value
+	 * setopmode_hdl sets. */
+	pmlmeinfo->state = WIFI_FW_AP_STATE;
+
 	//Set BSSID REG
 	rtw_hal_set_hwreg(padapter, HW_VAR_BSSID, pnetwork->MacAddress);
 
