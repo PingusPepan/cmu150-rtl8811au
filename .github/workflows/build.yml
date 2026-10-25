@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default. Only the release jobs, which run on pushes to main, can write.
+permissions:
+  contents: read
+
+jobs:
+  # Reads the Conventional Commits since the last release and keeps a release PR open with
+  # the version bump and the CHANGELOG.md entry. Merging that PR creates the tag and the
+  # GitHub release, and release_created tells the jobs below to attach the build to it.
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+
+  driver:
+    # Runs on every event. release-please is skipped on pull requests, so do not require it to
+    # have succeeded -- only that it did not fail.
+    needs: release-please
+    if: ${{ !cancelled() && needs.release-please.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The build image is two Debian stages plus the cross toolchain and the pinned reference
+      # kernel tarball, none of which changes between runs. Cache it on the Dockerfile's hash.
+      - name: Cache the build image
+        id: image-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/cmu-image
+          key: cmu-image-${{ hashFiles('build/Dockerfile') }}
+
+      - name: Load the cached build image
+        if: steps.image-cache.outputs.cache-hit == 'true'
+        run: docker load -i ~/.cache/cmu-image/image.tar
+
+      - name: Build the build image
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          docker build -t cmu-rtl8811au:latest -f build/Dockerfile build/
+          mkdir -p ~/.cache/cmu-image
+          docker save cmu-rtl8811au:latest -o ~/.cache/cmu-image/image.tar
+
+      # The kernel tree is only a compile reference; nothing in it is shipped. Cache the
+      # prepared tree on build/Dockerfile (which pins the kernel and the host tools
+      # modules_prepare runs with) and on prepare-kernel.sh (which configures it).
+      - name: Cache the prepared kernel tree
+        id: kernel-cache
+        uses: actions/cache@v5
+        with:
+          path: build/.work
+          key: kernel-${{ hashFiles('build/prepare-kernel.sh', 'build/Dockerfile') }}
+
+      - name: Prepare the kernel tree
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: docker run --rm -v "$PWD":/build cmu-rtl8811au:latest build/prepare-kernel.sh
+
+      # A cached tree is already configured, but the autoconf fixups are idempotent, so re-run
+      # them rather than trusting the cache to hold the exact compile view.
+      - name: Re-assert the kernel compile view
+        if: steps.kernel-cache.outputs.cache-hit == 'true'
+        run: docker run --rm -v "$PWD":/build cmu-rtl8811au:latest build/prepare-kernel.sh
+
+      - name: Build the driver
+        run: docker run --rm -v "$PWD":/build cmu-rtl8811au:latest build/build-driver.sh
+
+      # A release build is named after the release version; any other build after the date
+      # and commit.
+      - name: Package
+        env:
+          RELEASE_VERSION: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.version || '' }}
+        run: |
+          VERSION="${RELEASE_VERSION:-$(date +%Y.%m.%d)-${GITHUB_SHA::7}}"
+          docker run --rm -v "$PWD":/build cmu-rtl8811au:latest build/package.sh "$VERSION"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: cmu150-rtl8811au
+          path: |
+            out/*.tar.gz
+            out/*.tar.gz.sha256
+          if-no-files-found: error
+
+  scripts:
+    # The scripts that run on the head unit must parse under BusyBox 1.19.2 ash, which is
+    # much older than any shell on the runner. shellcheck in POSIX mode is the closest
+    # standing check; the bashisms it flags are exactly what that ash would reject.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck the on-unit scripts (POSIX sh)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -s sh -S warning install/*.sh
+      - name: shellcheck the build scripts (bash)
+        run: shellcheck -s bash -S warning build/*.sh
+
+  release-assets:
+    # Attaches the build to the release release-please has just created.
+    needs: [release-please, driver, scripts]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: cmu150-rtl8811au
+          path: out
+
+      - name: Attach the archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" out/*.tar.gz out/*.tar.gz.sha256 --repo "$GITHUB_REPOSITORY"

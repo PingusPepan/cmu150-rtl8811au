@@ -1,0 +1,22 @@
+<!-- ==========================================================================
+     Service block for the RTL8811AU dongle. Paste it into the service manifest
+     the unit boots (/jci/sm/sm.conf, or /jci/sm/sm_WCP.conf on units that boot
+     that one; install.sh says which), directly after the start_wifi service's
+     closing </service> and before NMS_svc. install.sh prints this file and
+     does NOT edit the manifest for you: a bad edit there costs a recovery, so
+     it stays a deliberate manual step.
+
+     reset_board="no": this is an add-on and must never reset the unit.
+     exit_allowed / started_after_exit_allowed="yes": it is one-shot and exits.
+
+     load_wlan1 dependencies:
+       start_wifi - the onboard radio comes up first, so it keeps wlan0 and the
+                    dongle becomes wlan1.
+       stage_usb  - the USB stack is ready, so the adapter can enumerate.
+
+     Adjust the path if you installed somewhere other than /data_persist/wl.
+     ========================================================================== -->
+        <service type="process" name="load_wlan1" path="/data_persist/wl/load-wlan1.sh" autorun="yes" reset_board="no" retry_count="2" args="" exit_allowed="yes" started_after_exit_allowed="yes" >
+            <dependency type="service" value="start_wifi"/>
+            <dependency type="service" value="stage_usb"/>
+        </service>

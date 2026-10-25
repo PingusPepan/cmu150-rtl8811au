@@ -1,0 +1,54 @@
+cmu150-rtl8811au
+==============
+
+This repository is licensed GPL-2.0-only. It contains, and builds on, work by others.
+
+Upstream driver (driver/)
+-------------------------
+Realtek RTL8812AU/RTL8821AU USB Wi-Fi driver, version 4.3.14.
+
+    Copyright (c) 2007 - 2011 Realtek Corporation. All rights reserved.
+
+Released by Realtek under "version 2 of the GNU General Public License as published by the
+Free Software Foundation" -- GPL-2.0-only, with no "or later" clause. Every source file under
+driver/ carries that header and os_dep/linux/os_intfs.c declares MODULE_LICENSE("GPL").
+The modifications in this repository are derivative works of that code and are therefore
+GPL-2.0-only as well; no other licence was available to choose.
+
+Lineage of the vendored tree:
+
+    Realtek vendor drop v4.3.14
+      -> https://github.com/diederikdehaas/rtl8812AU
+        -> https://github.com/abperiasamy/rtl8812AU_8821AU_linux   (the base pinned here)
+          -> this repository
+
+driver/CONTRIBUTORS.md lists the upstream contributors and is preserved unchanged.
+The base is imported unchanged in this repository's first commit; every change to it is a
+separate later commit.
+
+Head unit cfg80211 ABI (abi/)
+-----------------------------
+abi/include/ is the generated header set from Texas Instruments' compat-wireless release
+ol_R5.SP8.01, which is what the CMU150's own cfg80211 module was built from. The driver
+is compiled against these headers rather than the build kernel's so that struct wiphy,
+struct cfg80211_ops and struct station_info match the module already running on the unit.
+
+    https://git.ti.com/git/wl12xx/compat-wireless.git   (tag ol_R5.SP8.01)
+    https://git.ti.com/git/wl12xx/compat.git            (tag ol_R5.SP8.01)
+
+These are backported Linux kernel headers plus TI's compatibility layer, GPL-2.0.
+abi/Module.symvers is the cfg80211 export list from a build of that tree, trimmed to the
+cfg80211 module and rewritten to a relative path. See abi/README.md.
+
+Build kernel
+------------
+build/Dockerfile downloads Boundary Devices' i.MX6 3.0.35 BSP at a pinned commit into the build
+image. It is a compile reference only -- nothing from it is redistributed here or shipped in a
+release.
+
+    https://github.com/boundarydevices/linux-imx6   (commit d97f449780544a18ca7c877dfc4742a3d92e4ccf)
+
+Everything else
+---------------
+The build harness (build/), the scripts that run on the head unit (install/) and the
+documentation (docs/) are original work, licensed GPL-2.0-only to match the driver.

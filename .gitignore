@@ -1,0 +1,21 @@
+# Build output and scratch. Nothing here belongs in the repository.
+/out/
+/build/.work/
+
+# Kernel module build artifacts, which land in driver/ during a build.
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+.*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+!abi/Module.symvers
+
+# Patch and editor leftovers
+*.orig
+*.rej
+*~
+/.idea/
